@@ -3,6 +3,9 @@ import './App.css'
 
 const API_URL = 'https://countriesnow.space/api/v0.1/countries'
 const TRANSLATE_URL = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ka&dt=t&q='
+const TIMEOUT_MS = 10000
+
+const flagUrl = (code, width) => `https://flagcdn.com/w${width}/${code.toLowerCase()}.webp`
 
 const countryNames = new Intl.DisplayNames(['ka'], { type: 'region' })
 const currencyNames = new Intl.DisplayNames(['ka'], { type: 'currency' })
@@ -21,10 +24,16 @@ function georgianOf(names, code) {
 
 const displayName = (country) => country.nameKa ?? country.name
 
-async function getData(url, signal) {
-  const res = await fetch(url, { signal })
+async function fetchJson(url, signal) {
+  const res = await fetch(url, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]),
+  })
   if (!res.ok) throw new Error(res.status)
-  const json = await res.json()
+  return res.json()
+}
+
+async function getData(url, signal) {
+  const json = await fetchJson(url, signal)
   if (json.error) throw new Error(json.msg)
   return json.data
 }
@@ -54,22 +63,35 @@ async function fetchCountries(signal) {
       dialCode: c.dialCode ? `+${String(c.dialCode).replace('+', '')}` : null,
       population: pop?.value ?? null,
       populationYear: pop?.year ?? null,
-      flag: c.iso2 ? `https://flagcdn.com/w320/${c.iso2.toLowerCase()}.png` : c.flag,
+      flag: c.iso2 ? flagUrl(c.iso2, 320) : c.flag,
     }
   })
 }
 
-async function translateToGeorgian(words) {
+async function translateToGeorgian(words, signal) {
   const result = []
   for (let i = 0; i < words.length; i += 50) {
     const part = words.slice(i, i + 50)
-    const res = await fetch(TRANSLATE_URL + encodeURIComponent(part.join('\n')))
-    if (!res.ok) throw new Error(res.status)
-    const data = await res.json()
+    const data = await fetchJson(TRANSLATE_URL + encodeURIComponent(part.join('\n')), signal)
     const lines = data[0].map((s) => s[0]).join('').split('\n').map((s) => s.trim())
     result.push(...(lines.length === part.length ? lines : part))
   }
   return result
+}
+
+async function translateCountries(list, signal) {
+  const jobs = [
+    ...list.filter((c) => !c.nameKa).map((c) => ({ id: c.id, field: 'nameKa', text: c.name })),
+    ...list.filter((c) => c.capital).map((c) => ({ id: c.id, field: 'capitalKa', text: c.capital })),
+  ]
+  const translated = await translateToGeorgian(jobs.map((j) => j.text), signal)
+
+  const updates = new Map()
+  jobs.forEach((job, i) => {
+    if (!isGeorgian(translated[i])) return
+    updates.set(job.id, { ...updates.get(job.id), [job.field]: translated[i] })
+  })
+  return updates
 }
 
 const SEARCH_MODES = [
@@ -191,7 +213,7 @@ function Hero({ count, query, onQueryChange, searchBy, onSearchByChange }) {
                 onQueryChange(chip.text)
               }}
             >
-              <img src={`https://flagcdn.com/w40/${chip.code}.png`} alt="" />
+              <img src={flagUrl(chip.code, 40)} alt="" width="18" height="12" />
               {chip.text}
             </button>
           ))}
@@ -205,7 +227,14 @@ function CountryCard({ country, isFavorite, onToggleFavorite, onOpen }) {
   return (
     <article className="country-card">
       <div className="flag">
-        <img src={country.flag} alt={`${displayName(country)}ს დროშა`} loading="lazy" />
+        <img
+          src={country.flag}
+          alt={`${displayName(country)}ს დროშა`}
+          width="320"
+          height="213"
+          loading="lazy"
+          decoding="async"
+        />
         <span className="code">{country.id}</span>
         <button
           type="button"
@@ -361,7 +390,14 @@ function CountryModal({ country, isFavorite, onToggleFavorite, onClose }) {
           ✕
         </button>
 
-        <img className="modal-flag" src={country.flag} alt={`${displayName(country)}ს დროშა`} />
+        <img
+          className="modal-flag"
+          src={country.flag}
+          alt={`${displayName(country)}ს დროშა`}
+          width="320"
+          height="213"
+          decoding="async"
+        />
 
         <div className="modal-body">
           <h2>{displayName(country)}</h2>
@@ -463,50 +499,38 @@ function App() {
   }, [favorites])
 
   useEffect(() => {
-    let cancelled = false
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 15000)
 
     async function load() {
       setLoading(true)
       setError(null)
-      try {
-        const list = await fetchCountries(controller.signal)
-        if (cancelled) return
-        setCountries(list)
-        setLoading(false)
 
-        const jobs = [
-          ...list.filter((c) => !c.nameKa).map((c) => ({ id: c.id, field: 'nameKa', text: c.name })),
-          ...list.filter((c) => c.capital).map((c) => ({ id: c.id, field: 'capitalKa', text: c.capital })),
-        ]
-        try {
-          const translated = await translateToGeorgian(jobs.map((j) => j.text))
-          if (cancelled) return
-          const updates = new Map()
-          jobs.forEach((job, i) => {
-            if (!isGeorgian(translated[i])) return
-            updates.set(job.id, { ...updates.get(job.id), [job.field]: translated[i] })
-          })
-          setCountries((prev) => prev.map((c) => ({ ...c, ...updates.get(c.id) })))
-        } catch {
-          return
-        }
-      } catch {
-        if (cancelled) return
-        setError('ქვეყნების ჩატვირთვა ვერ მოხერხდა. შეამოწმე ინტერნეტი და სცადე თავიდან.')
+      let list
+      try {
+        list = await fetchCountries(controller.signal)
+      } catch (err) {
+        if (controller.signal.aborted) return
+        setError(
+          err.name === 'TimeoutError'
+            ? 'სერვერი 10 წამში არ პასუხობს. სცადე თავიდან.'
+            : 'ქვეყნების ჩატვირთვა ვერ მოხერხდა. შეამოწმე ინტერნეტი და სცადე თავიდან.'
+        )
         setLoading(false)
-      } finally {
-        clearTimeout(timeout)
+        return
+      }
+      setCountries(list)
+      setLoading(false)
+
+      try {
+        const updates = await translateCountries(list, controller.signal)
+        setCountries((prev) => prev.map((c) => ({ ...c, ...updates.get(c.id) })))
+      } catch {
+        return
       }
     }
 
     load()
-    return () => {
-      cancelled = true
-      clearTimeout(timeout)
-      controller.abort()
-    }
+    return () => controller.abort()
   }, [reloadKey])
 
   const visibleCountries = useMemo(() => {
