@@ -140,7 +140,7 @@ function Header({ favoritesCount, showFavorites, onToggleView, theme, onToggleTh
   )
 }
 
-function Hero({ count, query, onQueryChange, searchBy, onSearchByChange }) {
+function Hero({ count, query, onQueryChange, searchBy, onSearchByChange, onQuickSearch }) {
   return (
     <section className="hero" id="home" aria-labelledby="hero-title">
       <div className="globe-wrap" aria-hidden="true">
@@ -205,14 +205,7 @@ function Hero({ count, query, onQueryChange, searchBy, onSearchByChange }) {
         <div className="chips">
           <span>პოპულარული:</span>
           {QUICK_SEARCHES.map((chip) => (
-            <button
-              key={chip.text}
-              type="button"
-              onClick={() => {
-                onSearchByChange('name')
-                onQueryChange(chip.text)
-              }}
-            >
+            <button key={chip.text} type="button" onClick={() => onQuickSearch(chip.text)}>
               <img src={flagUrl(chip.code, 40)} alt="" width="18" height="12" />
               {chip.text}
             </button>
@@ -345,7 +338,11 @@ function CountryModal({ country, isFavorite, onToggleFavorite, onClose }) {
   useEffect(() => {
     const previous = document.activeElement
     closeRef.current?.focus()
-    return () => previous?.focus?.()
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = ''
+      previous?.focus?.()
+    }
   }, [])
 
   useEffect(() => {
@@ -557,6 +554,13 @@ function App() {
 
   const isFavorite = (id) => favorites.includes(id)
 
+  function quickSearch(text) {
+    setSearchBy('name')
+    setQuery(text)
+    setShowFavorites(false)
+    document.getElementById('countries')?.scrollIntoView({ behavior: 'smooth' })
+  }
+
   return (
     <div className="app">
       <Header
@@ -574,6 +578,7 @@ function App() {
           onQueryChange={setQuery}
           searchBy={searchBy}
           onSearchByChange={setSearchBy}
+          onQuickSearch={quickSearch}
         />
 
         <CountryCatalog
