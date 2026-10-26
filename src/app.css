@@ -950,7 +950,7 @@ select:focus-visible {
   border: none;
   border-radius: 12px;
   background: rgb(11 20 51 / 75%);
-  color: #fff;
+  color: #fffffff5;
   font-size: 15px;
   backdrop-filter: blur(6px);
 }
@@ -1025,7 +1025,7 @@ select:focus-visible {
   flex-basis: 100%;
   border: none;
   background: linear-gradient(90deg, var(--amber), var(--coral));
-  color: #fff;
+  color: #ffffffce;
 }
 
 .modal-actions .primary:hover {
